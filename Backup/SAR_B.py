@@ -8,6 +8,8 @@ import time
 from typing import Tuple, List, Dict, Any
 import json
 import tensorflow_addons as tfa
+from keras.applications.inception_v3 import preprocess_input
+from scipy import linalg
 
 # Set up logging configuration
 logging.basicConfig(
@@ -540,18 +542,24 @@ class CycleGAN:
         
         logger.info(f"Model saved successfully to {save_dir}")
         
-        symbolic_weights = getattr(self.gen_optimizer, 'weights', None)
-        if symbolic_weights:
+        try:
+         symbolic_weights = getattr(self.gen_optimizer, 'weights', None)
+         if symbolic_weights:
             weight_values = tf.keras.backend.batch_get_value(symbolic_weights)
-            with open(os.path.join(save_dir, 'gen_optimizer_weights.npy'), 'wb') as f:
-                np.save(f, weight_values)
+            # Save each weight array separately
+            for i, w in enumerate(weight_values):
+                np.save(os.path.join(save_dir, f'gen_optimizer_weights_{i}.npy'), w)
         
-        
-        symbolic_weights = getattr(self.disc_optimizer, 'weights', None)
-        if symbolic_weights:
+         symbolic_weights = getattr(self.disc_optimizer, 'weights', None)
+         if symbolic_weights:
             weight_values = tf.keras.backend.batch_get_value(symbolic_weights)
-            with open(os.path.join(save_dir, 'disc_optimizer_weights.npy'), 'wb') as f:
-                np.save(f, weight_values)
+            # Save each weight array separately
+            for i, w in enumerate(weight_values):
+                np.save(os.path.join(save_dir, f'disc_optimizer_weights_{i}.npy'), w)
+        except Exception as e:
+         logger.warning(f"Failed to save optimizer states: {str(e)}")
+         logger.warning("Training can continue but optimizer states won't be restored")
+
 
         if isinstance(self.gen_optimizer.learning_rate, tf.keras.optimizers.schedules.ExponentialDecay):
           learning_rate_config = {
@@ -618,7 +626,7 @@ class CycleGAN:
             
         disc_opt_weights_path = os.path.join(save_dir, 'disc_optimizer_weights.npy')
         if os.path.exists(disc_opt_weights_path):
-            with open(dc_opt_weights_path, 'rb') as f:
+            with open(disc_opt_weights_path, 'rb') as f:
                 weight_values = np.load(f, allow_pickle=True)
             model.disc_optimizer.set_weights(weight_values)
         
@@ -890,12 +898,29 @@ class Trainer:
         self.val_disc_loss_metric = tf.keras.metrics.Mean()
         self.val_cycle_loss_metric = tf.keras.metrics.Mean()
         self.val_cls_loss_metric = tf.keras.metrics.Mean()
-
+        self.lpips_metric = tf.keras.metrics.Mean()
+        self.inception_score = tf.keras.metrics.Mean()
+        self.l1_loss_metric = tf.keras.metrics.Mean()
+        self.l2_loss_metric = tf.keras.metrics.Mean()
+        self.fid_score_metric = tf.keras.metrics.Mean()
+        self.inception_model = tf.keras.applications.InceptionV3(include_top=False, pooling='avg', input_shape=(75, 75, 3))
+        self.vgg = tf.keras.applications.VGG16(include_top=False)
+   
         self.metrics_logger = MetricsLogger(output_dir)
         self.visualizer = Visualizer(output_dir)
         self.patience_counter = 0
         
         os.makedirs(output_dir, exist_ok=True)
+
+    def _get_inception_features(self, images):
+        """Get inception features within tf.function context."""
+        # Resize images to inception input size
+        resized_images = tf.image.resize(images, (75, 75), method='bilinear')
+    # Convert from [-1, 1] to [0, 255] range
+        processed_images = (resized_images + 1) * 127.5
+    # Get features
+        features = self.inception_model(processed_images, training=False)
+        return features
     
     def train(self):
      """Execute training loop with validation and early stopping."""
@@ -1032,6 +1057,7 @@ class Trainer:
     
      logger.info("="*50)
     
+
     # Save final metrics to JSON
      final_metrics_path = os.path.join(self.output_dir, 'final_metrics.json')
      metrics_to_save = {
@@ -1042,11 +1068,176 @@ class Trainer:
         json.dump(metrics_to_save, f, indent=4)
     
      logger.info(f"\nFinal metrics saved to: {final_metrics_path}")
+    
+     
 
+    def _calculate_lpips(self, img1, img2):
+        
+        feat1 = self.vgg(img1)
+        feat2 = self.vgg(img2)
+        return tf.reduce_mean(tf.square(feat1 - feat2))
+    
+    def _calculate_covmean(self, sigma1, sigma2):
+        try:
+            return linalg.sqrtm(sigma1.dot(sigma2))
+        except Exception as e:
+            logger.error(f"Covmean calculation failed: {str(e)}")
+            # Return identity matrix as fallback
+            return np.eye(sigma1.shape[0])
+
+    def _calculate_inception_score(self, images):
+     try:
+        resized_images = tf.image.resize(images, (75, 75), method='bilinear')
+        processed_images = (resized_images + 1) * 127.5
+        
+        # Get predictions with gradient disabled
+        preds = self.inception_model(processed_images, training=False)
+        
+        # Apply stable softmax
+        preds = tf.nn.softmax(preds - tf.reduce_max(preds, axis=1, keepdims=True))
+        
+        # Ensure no zeros
+        epsilon = 1e-10
+        preds = tf.clip_by_value(preds, epsilon, 1.0)
+        
+        # Calculate marginal distribution
+        p_y = tf.reduce_mean(preds, axis=0, keepdims=True)
+        p_y = tf.clip_by_value(p_y, epsilon, 1.0)
+        
+        # Calculate KL divergence with numerical stability
+        kl = tf.reduce_sum(
+            preds * (tf.math.log(preds + epsilon) - tf.math.log(p_y + epsilon)),
+            axis=1
+        )
+        
+        # Safe mean and exp operations
+        mean_kl = tf.reduce_mean(kl)
+        if tf.math.is_nan(mean_kl) or tf.math.is_inf(mean_kl):
+            logger.warning("Invalid KL divergence encountered")
+            return 0.0
+            
+        score = tf.exp(mean_kl)
+        
+        # Final validity check and clipping
+        score = tf.clip_by_value(score, 0.0, 100.0)
+        if tf.math.is_nan(score) or tf.math.is_inf(score):
+            logger.warning("Invalid inception score encountered")
+            return 0.0
+            
+        return float(score)
+        
+     except Exception as e:
+        logger.error(f"Inception Score calculation failed: {str(e)}")
+        return 0.0
+
+    def _calculate_l1_l2_loss(self, img1, img2):
+        l1_loss = tf.reduce_mean(tf.abs(img1 - img2))
+        l2_loss = tf.reduce_mean(tf.square(img1 - img2))
+        return l1_loss, l2_loss
+
+    def _calculate_fid(self, real_features, fake_features):
+    
+     try:
+        # Ensure features are float32
+        real_features = tf.cast(real_features, tf.float32)
+        fake_features = tf.cast(fake_features, tf.float32)
+        
+        # Calculate means
+        mu1 = tf.reduce_mean(real_features, axis=0)
+        mu2 = tf.reduce_mean(fake_features, axis=0)
+        
+        # Calculate covariances with better numerical stability
+        n_real = tf.cast(tf.shape(real_features)[0], tf.float32)
+        n_fake = tf.cast(tf.shape(fake_features)[0], tf.float32)
+        
+        # Center the features
+        real_centered = real_features - mu1[None, :]
+        fake_centered = fake_features - mu2[None, :]
+        
+        # Calculate covariances
+        sigma1 = tf.matmul(real_centered, real_centered, transpose_a=True) / (n_real - 1)
+        sigma2 = tf.matmul(fake_centered, fake_centered, transpose_a=True) / (n_fake - 1)
+        
+        # Add small regularization to ensure positive definiteness
+        epsilon = 1e-6
+        sigma1 = sigma1 + tf.eye(tf.shape(sigma1)[0]) * epsilon
+        sigma2 = sigma2 + tf.eye(tf.shape(sigma2)[0]) * epsilon
+        
+        # Calculate squared difference between means
+        diff = mu1 - mu2
+        ssdiff = tf.reduce_sum(tf.square(diff))
+        
+        return ssdiff, sigma1, sigma2
+        
+     except Exception as e:
+        logger.error(f"FID calculation failed: {str(e)}")
+        return None
+     
+    def _finalize_fid(self, ssdiff, sigma1, sigma2):
+     """Finalize FID calculation with additional checks."""
+     try:
+        if ssdiff is None:
+            return float('inf')
+            
+        # Convert to numpy arrays
+        sigma1_np = sigma1.numpy()
+        sigma2_np = sigma2.numpy()
+        
+        # Check for invalid values
+        if (np.isnan(sigma1_np).any() or np.isnan(sigma2_np).any() or 
+            np.isinf(sigma1_np).any() or np.isinf(sigma2_np).any()):
+            logger.warning("Invalid values in covariance matrices")
+            return float('inf')
+            
+        # Calculate the matrix square root
+        covmean = self._calculate_covmean(sigma1_np, sigma2_np)
+        
+        # Handle numerical instability
+        if covmean is None:
+            return float('inf')
+            
+        if np.iscomplexobj(covmean):
+            if not np.allclose(np.zeros_like(covmean.imag), covmean.imag, rtol=1e-3):
+                logger.warning("Significant complex component in covmean")
+            covmean = covmean.real
+            
+        # Calculate final FID score
+        fid = float(ssdiff.numpy() + np.trace(sigma1_np + sigma2_np - 2.0 * covmean))
+        
+        # Clip to reasonable range and check validity
+        if np.isnan(fid) or np.isinf(fid):
+            logger.warning("Invalid FID score encountered")
+            return float('inf')
+            
+        return np.clip(fid, 0.0, 1000.0)
+        
+     except Exception as e:
+        logger.error(f"FID finalization failed: {str(e)}")
+        return float('inf')
+     
     @tf.function
     def _validation_step(self, real_color, real_sar, labels):
         """Single validation step."""
         metrics = self.model.validation_step(real_color, real_sar, labels)
+    
+         
+        fake_color = metrics['generated_images'][0]
+        cycled_color = metrics['generated_images'][2]
+        
+        # Calculate inception features within tf.function
+        real_features = self._get_inception_features(real_color)
+        fake_features = self._get_inception_features(cycled_color)
+        
+        # Calculate other metrics
+        inception_score = self._calculate_inception_score(fake_color)
+        lpips_score = self._calculate_lpips(real_color, cycled_color)
+        l1_loss, l2_loss = self._calculate_l1_l2_loss(real_color, cycled_color)
+        
+        # Update metrics
+        self.lpips_metric.update_state(lpips_score)
+        self.inception_score.update_state(inception_score)
+        self.l1_loss_metric.update_state(l1_loss)
+        self.l2_loss_metric.update_state(l2_loss)
         
         # Update metrics
         self.val_gen_loss_metric.update_state(metrics['gen_loss'])
@@ -1054,10 +1245,13 @@ class Trainer:
         self.val_cycle_loss_metric.update_state(metrics['cycle_loss'])
         self.val_cls_loss_metric.update_state(metrics['cls_loss'])
         
-        return metrics
+        return metrics, real_features, fake_features
     
     def _validate(self) -> Dict[str, tf.Tensor]:
         """Execute validation step with improved memory management."""
+
+        real_features_list = []
+        fake_features_list = []
         # Initialize TensorArrays for metrics
         batch_size = next(iter(self.val_ds))[0][0].shape[0]
         num_batches = tf.data.experimental.cardinality(self.val_ds).numpy()
@@ -1070,30 +1264,56 @@ class Trainer:
         }
         
         for i, ((real_color, real_sar), labels) in enumerate(self.val_ds):
-            metrics = self._validation_step(real_color, real_sar, labels)
+            metrics, real_feat, fake_feat = self._validation_step(real_color, real_sar, labels)
+
+            real_features_list.append(real_feat)
+            fake_features_list.append(fake_feat)
             
             # Write to TensorArrays
             for key in metrics_arrays:
                 metrics_arrays[key] = metrics_arrays[key].write(i, metrics[key])
         
+        all_real_features = tf.concat(real_features_list, axis=0)
+        all_fake_features = tf.concat(fake_features_list, axis=0)
+        
+        fid_intermediate = self._calculate_fid(all_real_features, all_fake_features)
+        if fid_intermediate is not None:
+         ssdiff, sigma1, sigma2 = fid_intermediate
+         fid_score = self._finalize_fid(ssdiff, sigma1, sigma2)
+        else:
+         fid_score = float('inf')
+    
+        self.fid_score_metric.update_state(fid_score)
+
         # Compute mean metrics
         val_metrics = {
             'gen_loss': self.val_gen_loss_metric.result(),
             'disc_loss': self.val_disc_loss_metric.result(),
             'cycle_loss': self.val_cycle_loss_metric.result(),
             'cls_loss': self.val_cls_loss_metric.result(),
+            'lpips': self.lpips_metric.result(),
+            'inception_score': self.inception_score.result(),
+            'l1_loss': self.l1_loss_metric.result(),
+            'l2_loss': self.l2_loss_metric.result(),
+            'fid_score': self.fid_score_metric.result()
         }
-        
+
         # Add image quality metrics
         for key in metrics_arrays:
             val_metrics[key] = tf.reduce_mean(metrics_arrays[key].stack())
         
         logger.info(
-            f"Validation - Cycle Loss: {val_metrics['cycle_loss']:.4f}, "
+             f"Validation - "
+            f"Cycle Loss: {val_metrics['cycle_loss']:.4f}, "
             f"PSNR Color: {val_metrics['psnr_color']:.2f}, "
             f"PSNR SAR: {val_metrics['psnr_sar']:.2f}, "
             f"SSIM Color: {val_metrics['ssim_color']:.4f}, "
-            f"SSIM SAR: {val_metrics['ssim_sar']:.4f}"
+            f"SSIM SAR: {val_metrics['ssim_sar']:.4f}, "
+            f"LPIPS: {val_metrics['lpips']:.4f}, "
+            f"Inception: {val_metrics['inception_score']:.4f}, "
+            f"L1: {val_metrics['l1_loss']:.4f}, "
+            f"L2: {val_metrics['l2_loss']:.4f}, "
+            f"FID: {val_metrics['fid_score']:.4f}"
         )
         
         return val_metrics
@@ -1147,12 +1367,12 @@ def main():
     config = {
         'image_size': 128,  # Reduced from 256
         'batch_size': 8,     # Reduced batch size for stability
-        'epochs': 10,       # Reduced epochs with better scheduling
+        'epochs': 100,       # Reduced epochs with better scheduling
         'dataset_dir': './Dataset',
         'output_dir': './output',
         'learning_rate': 2e-4,
         'lambda_cyc': 5.0,
-        'lambda_cls': 0.3,
+        'lambda_cls': 0.5,
         'early_stopping_patience': 12,
         'validation_split': 0.2,
         'cache_dataset': True  # Enable dataset caching for faster training

@@ -1,4 +1,14 @@
 Dataset/
+*.log
+logs/
+output/
+tuning/
+__pycache__/
+_/
+tuner_results/
+cycle_gan_tuning/
+tuner_dir_1/
+output_resumed/
 logs/
 output/
 __pycache__/
@@ -15,3 +25,10 @@ output_updatedSAR/
 .1/
 _1/
 __pycache__/
+checkpoints/
+samples/
+best_discriminator.pth
+best_generator.pth
+optimization_checkpoint_1 (2).pkl
+SAR_Literature_Review.xlsx
+terrain_classifier_checkpoints/
