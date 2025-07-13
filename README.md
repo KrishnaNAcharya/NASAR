@@ -59,9 +59,17 @@ python resume_training.py
 ```
 
 ## Results
-- **High-fidelity SAR-to-optical translation** across multiple terrains
-- **Robust terrain classification** with >90% accuracy
-- **Competitive image quality metrics** (PSNR, SSIM, FID)
+
+### Terrain Classification (ResNet34)
+- **Accuracy:** 99.94%
+
+### Image Translation (Conditional GAN)
+**Key Evaluation Metrics:**
+- **FID Score:** 108.18
+- **SSIM:** 0.36
+- **PSNR:** 19 dB
+- **Inception Score (IS):** 3.07
+
 
 ## Applications
 - Remote sensing, environmental monitoring, agricultural assessment, defense and security, all-weather satellite imaging
