@@ -36,7 +36,7 @@ A PatchGAN discriminator evaluates the realism of the generated image, condition
 
 ## 🏗️ Training Setup:
 - **Framework** : PyTorch
-- **GPU** : NVIDIA Geforce RTX 4060
+- **GPU** : NVIDIA Geforce RTX 3060M
 - **Epochs** : 140
 - **Batch Size** : 8
 - **Learning Rate** : 2e-4
