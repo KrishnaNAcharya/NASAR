@@ -1,68 +1,96 @@
-# SAR Image Translation and Terrain Classification
+# Terrain-Aware Synthetic Aperture Radar Image (SAR) to RGB Colorization through Automated Terrain Classification using Conditional Generative Adversarial Network (GAN)
 
-## Project Overview
-This repository contains advanced deep learning models for Synthetic Aperture Radar (SAR) to optical image translation, with a focus on terrain-aware processing. The project leverages state-of-the-art Generative Adversarial Networks (GANs) and terrain classification to enhance satellite imagery for remote sensing, environmental monitoring, and defense applications.
+## 🛰️ Overview
 
-## Features
-- **Terrain-Aware GANs**: Custom architectures with terrain-guided attention and adaptive normalization.
-- **U-Net + PatchGAN**: High-fidelity image translation with skip connections and multi-scale discrimination.
-- **Terrain Classification**: ResNet-based classifier for urban, grassland, agriculture, and barrenland types.
-- **Mixed Precision & Multi-GPU Training**: Efficient, scalable training on modern hardware.
-- **Comprehensive Metrics**: PSNR, SSIM, FID, IS, LPIPS, and more.
-- **Automated Hyperparameter Tuning**: Keras Tuner integration for optimal model selection.
+This project implements a deep learning system for translating Synthetic Aperture Radar (SAR) imagery into realistic RGB images. A pretrained ResNet34 Model is finetuned to classify different terrains for SAR Images. Integrating the ResNet34 Model with a conditional Generative Adversarial Network (GAN) architecture, the model can generate colorized versions of SAR data that closely resemble aerial/satellite photography.
 
-## Dataset
-- **Source**: Sentinel-1 (SAR) and Sentinel-2 (optical) satellite images
-- **Terrains**: `urban`, `grassland`, `agri`, `barrenland`
-- **Structure**:
-  - `Dataset/<terrain>/SAR/` — SAR images
-  - `Dataset/<terrain>/Color/` — Corresponding optical images
-- **Image Size**: 256x256 RGB
 
-## Model Architectures
-- **Generator**: U-Net backbone, terrain encoder, memory-efficient residual blocks, instance normalization, SiLU activation
-- **Discriminator**: PatchGAN, spectral normalization, terrain-aware feature fusion, multi-scale outputs
-- **Classifier**: ResNet-34 backbone, dropout regularization, one-hot terrain encoding
 
-## Training & Evaluation
-- **Distributed Training**: Multi-GPU, mixed precision, gradient accumulation
-- **Losses**: Adversarial, L1, perceptual (EfficientNetB0/VGG16), gradient penalty, cycle consistency, feature matching
-- **Metrics**: PSNR, SSIM, FID, IS, LPIPS
-- **Visualization**: Side-by-side SAR, ground truth, and generated images
+## 🔍 Features
 
-## Usage
+- **Terrain-Conditional Image Translation**: Generates RGB images conditioned on terrain classification
+- **Multi-Terrain Support**: Urban, Grassland, Agricultural, and Barren Land domains
+- **UNet-Based Generator**: Advanced encoder-decoder architecture with skip connections
+- **PatchGAN Discriminator**: For high-quality local texture assessment
+- **Performance Metrics**: FID, SSIM, PSNR, and Inception Score (IS) evaluation
+
+## 🧠 Architecture
+
+<p align="center">
+  <img src="Arch.png" alt="Architecture Diagram" width="800"/>
+</p>
+
+
+The above figure depicts the architectural diagram that is used for the purpose.
+The model is built in two stages:
+
+1. Terrain Classification
+A ResNet34-based classifier takes in SAR images and predicts the terrain type (e.g., urban, grassland, agricultural, barrenland).
+
+The predicted terrain is converted into a one-hot encoded vector and passed through a small neural network to generate a terrain embedding.
+
+2. Terrain-Aware Colorization (UNet + PatchGAN)
+A UNet-based generator takes the SAR image and terrain embedding to generate a colorized version of the input.
+
+A PatchGAN discriminator evaluates the realism of the generated image, conditioned on both the SAR input and terrain type.
+
+## 🏗️ Training Setup:
+- **Framework** : PyTorch
+- **GPU** : NVIDIA Geforce RTX 3060M
+- **Epochs** : 140
+- **Batch Size** : 8
+- **Learning Rate** : 2e-4
+- **Mixed Precision** : Enabled
+
+## 🏗️ Dataset:
+The dataset consisted of 4 terrains namely, urban, grassland, barrenland and agri. Each terrain had 2 different folders, one for the SAR Images and the other included the Corresponding color images of it.
+The dataset was split in a 80/20 manner during training.
+
+## 🚀 Getting Started
 
 ### Requirements
 
-- Python 3.8+
-- PyTorch, torchvision, TensorFlow, Keras, scikit-image, matplotlib, numpy, tqdm, PIL, scipy
-
-### Training
-
-```bash
-python SAR_Main_PyTorch.py
-# or
-python SAR_UNET_PATCHGAN.py
+```
+torch>=1.8.0
+torchvision>=0.9.0
+numpy
+matplotlib
+Pillow
+tqdm
+scikit-image
 ```
 
-### Terrain Classifier
+  
 
-```bash
-python SAR_Classification_training.py
-python SAR_Classification_Testing.py
-```
 
-### Hyperparameter Tuning
+## 📊 Results
 
-```bash
-python hyperparameter_tuning.py
-```
+Our model achieves state-of-the-art results in SAR-to-RGB conversion across multiple terrain types. By conditioning on terrain classification, the model produces more accurate and visually coherent colorized images than terrain-agnostic approaches.
+We evaluated our model using multiple metrics:
+- **FID** (Fréchet Inception Distance): Measures similarity between generated and real images
+- **SSIM** (Structural Similarity Index): Evaluates structural preservation
+- **PSNR** (Peak Signal-to-Noise Ratio): Assesses pixel-level reconstruction quality
+- **IS** (Inception Score): Measures diversity and quality of generated samples
 
-### Resume Training
+Classification accuracy achieved by the ResNet34 Model : **99.94%**
+### Key Metrics Achieved by the GAN Model:
+- **FID Score**: 108.18 
+- **SSIM**: 0.36
+- **PSNR**: 19 dB
+- **IS** : 3.07
 
-```bash
-python resume_training.py
-```
+
+<p align="center">
+  <img src="random_terrain_comparison.jpg" alt="SAR to RGB Translation Examples" width="800"/>
+</p>
+ The above SAR Images are taken from 4 different terrains, shuffled and sent to the model for prediction.
+The second column represents the ground truth images of all the input SAR Images and the third column represents the images which are generated by the model.
+<br>
+<p align="center">
+  <img src="ROIs1868_summer_s1_59_p8_colorized_comparison.jpg" alt="SAR to RGB Translation Examples" width="700"/>
+</p>
+SAR Input Image provided by the user and the corresponding output colorized image provided by our model.
+
 
 ### Docker Usage
 
@@ -79,18 +107,32 @@ docker run --rm -it sar-image-translation
 docker run --rm -it sar-image-translation python SAR_UNET_PATCHGAN.py
 ```
 
-## Results
-- **High-fidelity SAR-to-optical translation** across multiple terrains
-- **Robust terrain classification** with >90% accuracy
-- **Competitive image quality metrics** (PSNR, SSIM, FID)
 
-## Applications
-- Remote sensing, environmental monitoring, agricultural assessment, defense and security, all-weather satellite imaging
 
-## Citation
-If you use this code or models, please cite the repository and relevant papers.
 
----
 
-**Contact**: Krishna N Acharya  
-**Repository**: https://github.com/KrishnaNAcharya/SAR
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
