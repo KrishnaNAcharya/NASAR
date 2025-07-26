@@ -31,11 +31,14 @@ This repository contains advanced deep learning models for Synthetic Aperture Ra
 - **Visualization**: Side-by-side SAR, ground truth, and generated images
 
 ## Usage
+
 ### Requirements
+
 - Python 3.8+
 - PyTorch, torchvision, TensorFlow, Keras, scikit-image, matplotlib, numpy, tqdm, PIL, scipy
 
 ### Training
+
 ```bash
 python SAR_Main_PyTorch.py
 # or
@@ -43,19 +46,37 @@ python SAR_UNET_PATCHGAN.py
 ```
 
 ### Terrain Classifier
+
 ```bash
 python SAR_Classification_training.py
 python SAR_Classification_Testing.py
 ```
 
 ### Hyperparameter Tuning
+
 ```bash
 python hyperparameter_tuning.py
 ```
 
 ### Resume Training
+
 ```bash
 python resume_training.py
+```
+
+### Docker Usage
+
+To build and run the project in a Docker container:
+
+```bash
+# Build the Docker image
+docker build -t sar-image-translation .
+
+# Run the container (default runs SAR_UNET_PATCHGAN.py)
+docker run --rm -it sar-image-translation
+
+# To run other scripts, override the command:
+docker run --rm -it sar-image-translation python SAR_UNET_PATCHGAN.py
 ```
 
 ## Results

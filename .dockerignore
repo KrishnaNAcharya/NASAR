@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+Backup/
+checkpoints/
+samples/
+terrain_classifier_checkpoints/
+Dataset/

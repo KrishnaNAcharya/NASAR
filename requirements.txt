@@ -1,0 +1,10 @@
+torch
+torchvision
+tensorflow
+keras
+scikit-image
+matplotlib
+numpy
+tqdm
+pillow
+scipy
